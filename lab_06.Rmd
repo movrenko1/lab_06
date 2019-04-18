@@ -1,0 +1,183 @@
+---
+title: "Лабораторная №6"
+output:
+  html_document:
+    df_print: paged
+---
+#Регуляризация линейных моделей
+
+Набор данных Auto.
+```{r first-block}
+library('ISLR')              
+library('leaps')            
+library('glmnet')           
+library('pls')
+my.seed <- 1
+Auto <- Auto[,-9]
+fix(Auto)
+names(Auto)
+dim(Auto)
+```
+Отбор оптимального подмножества.
+
+```{r second}
+regfit.full <- regsubsets(mpg ~ ., Auto)
+reg.summary <- summary(regfit.full)
+
+names(reg.summary)
+# R^2 и скорректированный R^2
+round(reg.summary$rsq, 3)
+
+# на графике
+plot(1:7, reg.summary$rsq, type = 'b',
+     xlab = 'Количество предикторов', ylab = 'R-квадрат')
+# сода же добавим скорректированный R-квадрат
+points(1:7, reg.summary$adjr2, col = 'red')
+# модель с максимальным скорректированным R-квадратом
+which.max(reg.summary$adjr2)
+points(which.max(reg.summary$adjr2), 
+       reg.summary$adjr2[which.max(reg.summary$adjr2)],
+       col = 'red', cex = 2, pch = 20)
+legend('bottomright', legend = c('R^2', 'R^2_adg'),
+       col = c('black', 'red'), lty = c(1, NA),
+       pch = c(1, 1))
+reg.summary$bic
+which.min(reg.summary$bic)
+# график
+plot(reg.summary$bic, xlab = 'Число предикторов',
+     ylab = 'BIC', type = 'b')
+points(which.min(reg.summary$bic),
+       reg.summary$bic[which.min(reg.summary$bic)], 
+       col = 'red', cex = 2, pch = 20)
+# метод plot для визуализации результатов
+
+plot(regfit.full, scale = 'r2')
+plot(regfit.full, scale = 'adjr2')
+plot(regfit.full, scale = 'bic')
+
+# коэффициенты модели с наименьшим BIC
+round(coef(regfit.full, 3), 3)
+
+```
+
+Нахождение оптимальной модели при помощи методов проверочной выборки и перекрёстной проверки
+```{r third}
+#метод проверочной выборки
+set.seed(my.seed)
+train <- sample(c(T, F), nrow(Auto), rep = T)
+test <- !train
+
+# обучаем модели
+regfit.best <- regsubsets(mpg ~ ., data = Auto[train, ],
+                          nvmax = 7)
+# матрица объясняющих переменных модели для тестовой выборки
+test.mat <- model.matrix(mpg ~ ., data = Auto[test, ])
+
+# вектор ошибок
+val.errors <- rep(NA, 7)
+# цикл по количеству предикторов
+for (i in 1:7){
+  coefi <- coef(regfit.best, id = i)
+  pred <- test.mat[, names(coefi)] %*% coefi
+  # записываем значение MSE на тестовой выборке в вектор
+  val.errors[i] <- mean((Auto$mpg[test] - pred)^2)
+}
+round(val.errors, 0)
+which.min(val.errors)
+round(coef(regfit.best, 7), 3)
+
+
+# функция для прогноза для функции regsubset()
+predict.regsubsets <- function(object, newdata, id, ...){
+  form <- as.formula(object$call[[2]])
+  mat <- model.matrix(form, newdata)
+  coefi <- coef(object, id = id)
+  xvars <- names(coefi)
+  mat[, xvars] %*% coefi
+}
+
+# набор с оптимальным количеством переменных на полном наборе данных
+regfit.best <- regsubsets(mpg ~ ., data = Auto,
+                          nvmax = 7)
+round(coef(regfit.best, 7), 3)
+
+
+# отбираем 7 блоков наблюдений
+k <- 7
+set.seed(my.seed)
+folds <- sample(1:k, nrow(Auto), replace = T)
+
+# заготовка под матрицу с ошибками
+cv.errors <- matrix(NA, k, 7, dimnames = list(NULL, paste(1:7)))
+
+# заполняем матрицу в цикле по блокам данных
+for (j in 1:k){
+  best.fit <- regsubsets(mpg ~ ., data = Auto[folds != j, ],
+                         nvmax = 7)
+  # теперь цикл по количеству объясняющих переменных
+  for (i in 1:7){
+    # модельные значения mpg
+    pred <- predict(best.fit, Auto[folds == j, ], id = i)
+    # вписываем ошибку в матрицу
+    cv.errors[j, i] <- mean((Auto$mpg[folds == j] - pred)^2)
+  }
+}
+
+#MSE
+mean.cv.errors <- apply(cv.errors, 2, mean)
+round(mean.cv.errors, 0)
+
+
+plot(mean.cv.errors, type = 'b')
+points(which.min(mean.cv.errors), mean.cv.errors[which.min(mean.cv.errors)],
+       col = 'red', pch = 20, cex = 2)
+
+train.percent <- 0.5
+# обучающая выборка
+set.seed(my.seed)
+inTrain <- sample(seq_along(Auto$mpg), 
+                  nrow(Auto) * train.percent)
+df.test <- Auto[-inTrain, -1]
+f.lm <- lm(mpg ~ weight + year + origin, data = Auto)
+summary(f.lm)
+y.fact <- Auto[-inTrain,1]
+y.model.lm <- predict(f.lm, df.test)
+MSE.lm <- sum((y.model.lm - y.fact)^2) / length(y.model.lm)
+MSE.lm
+```
+MSE модели на тестовой выборке равно 10,99.
+
+Регрессия на главные компоненты.
+```{r fourth}
+x <- model.matrix(mpg ~ ., Auto)[, -1]
+y <- Auto$mpg
+
+set.seed(my.seed)
+train <- sample(1:nrow(x), nrow(x)/2)
+test <- -train
+y.test <- y[test]
+
+# кросс-валидация 
+pcr.fit <- pcr(mpg ~ ., data = Auto, scale = T, validation = 'CV')
+summary(pcr.fit)
+# график ошибок
+validationplot(pcr.fit, val.type = 'MSEP')
+
+pcr.fit <- pcr(mpg ~ ., data = Auto, subset = train, scale = T,
+               validation = 'CV')
+summary(pcr.fit)
+validationplot(pcr.fit, val.type = 'MSEP')
+
+# MSE на тестовой выборке
+pcr.pred <- predict(pcr.fit, x[test, ], ncomp = 7)
+round(mean((pcr.pred - y.fact)^2), 3)
+
+
+# подгоняем модель на всей выборке для M = 7 
+#  (оптимально по методу перекрёстной проверки)
+pcr.fit <- pcr(y ~ x, scale = T, ncomp = 7)
+summary(pcr.fit)
+
+```
+MSE модели на тестовой выборке равно 11,4.
+Можно сделать вывод о том, что метод "отбор оптимального подмножества" дал лучший результат. 
